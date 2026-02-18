@@ -15,7 +15,7 @@ def search():
 
     encoded_team = urllib.parse.quote(team_name)
     
-    # 직접 연결(1~3) 및 구글 경유 우회 연결(4~9)
+    # 직접 연결(네이버, 구글, 다음) 및 구글 경유 우회 연결(그 외)
     search_targets = [
         {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={encoded_team}+경기결과", "note": "최신 뉴스 및 국내외 공식 기록"},
         {"site": "구글 스포츠", "url": f"https://www.google.com/search?q={encoded_team}+경기결과", "note": "구글 자체 스코어 보드 및 통계"},
