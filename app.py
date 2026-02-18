@@ -11,7 +11,6 @@ app.config['JSON_AS_ASCII'] = False
 
 def get_best_date(team_name):
     try:
-        # 네이버에서 가장 정확한 날짜 패턴을 긁어옵니다.
         query = urllib.parse.quote(f"{team_name} 경기일정")
         url = f"https://search.naver.com/search.naver?query={query}"
         headers = {
@@ -21,18 +20,18 @@ def get_best_date(team_name):
         
         if res.status_code == 200:
             content = res.text
-            # 사용자님이 만족하신 바로 그 날짜 패턴!
+            # 1. 날짜 패턴 추출 (성공한 방식 그대로!)
             date_match = re.search(r'(\d{1,2}\.\s?\d{1,2}\.\s?\([월화수목금토일]\))', content)
             if date_match:
-                return date_match.group(1)
+                return date_match.group(1), "success"
             
-            # 요일이 없는 경우 대비
-            simple_date = re.search(r'(\d{1,2}\.\s?\d{1,2}\.)', content)
-            if simple_date:
-                return simple_date.group(1)
-        return None
+            # 2. 날짜는 없지만 시즌 종료 관련 단어가 있는지 확인
+            if any(word in content for word in ["종료", "시즌 오프", "일정이 없습니다", "시즌이 끝났습니다"]):
+                return None, "off_season"
+                
+        return None, "not_found"
     except:
-        return None
+        return None, "error"
 
 @app.route('/search', methods=['GET'])
 def search():
@@ -40,11 +39,16 @@ def search():
     if not team_name:
         return jsonify({"status": "error", "message": "팀명을 입력해주세요."})
 
-    # 공통으로 사용할 날짜 정보 획득
-    match_date = get_best_date(team_name)
-    display_text = f"최근: {match_date}" if match_date else "일정 확인 필요"
+    match_date, status = get_best_date(team_name)
+    
+    # [상황별 커스텀 멘트 설정]
+    if status == "success":
+        display_text = f"최근: {match_date}"
+    elif status == "off_season":
+        display_text = "시즌 종료 또는 일정 없음"
+    else:
+        display_text = "일정 확인 (직접 이동)"
 
-    # 모든 사이트의 match_info에 동일한 날짜를 넣어줍니다.
     search_targets = [
         {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={urllib.parse.quote(team_name)}+경기결과", "match_info": display_text},
         {"site": "구글 스포츠", "url": f"https://www.google.com/search?q={urllib.parse.quote(team_name)}+경기결과", "match_info": display_text},
