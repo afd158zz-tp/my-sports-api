@@ -7,7 +7,7 @@ CORS(app)
 app.config['JSON_AS_ASCII'] = False
 
 # [설정] 사용자의 API-SPORTS 키를 여기에 넣으세요
-API_KEY = "YOUR_API_KEY_HERE" # image_ad4599.png에서 확인하신 키
+API_KEY = "251241088c08a887a5b9626a6a9cdce8" # image_ad4599.png에서 확인하신 키
 
 def get_api_match_data(team_name):
     """API-SPORTS를 통해 100% 정확한 점수와 날짜 채굴"""
