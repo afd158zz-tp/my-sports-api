@@ -15,13 +15,11 @@ def search():
 
     encoded_team = urllib.parse.quote(team_name)
     
-    # 1~3번은 직접 연결, 4~9번은 구글 검색을 통한 우회 연결
+    # 직접 연결(1~3) 및 구글 경유 우회 연결(4~9)
     search_targets = [
         {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={encoded_team}+경기결과", "note": "최신 뉴스 및 국내외 공식 기록"},
         {"site": "구글 스포츠", "url": f"https://www.google.com/search?q={encoded_team}+경기결과", "note": "구글 자체 스코어 보드 및 통계"},
         {"site": "다음 스포츠", "url": f"https://search.daum.net/search?w=tot&q={encoded_team}+경기결과", "note": "영상 하이라이트 및 실시간 중계"},
-        
-        # 여기서부터는 해당 사이트가 직접 링크를 차단하므로 구글 검색 결과로 보냅니다.
         {"site": "플래시스코어", "url": f"https://www.google.com/search?q=site:flashscore.co.kr+{encoded_team}", "note": "플래시스코어 내 팀 정보 검색"},
         {"site": "네임드(Named)", "url": f"https://www.google.com/search?q=site:named.com+{encoded_team}", "note": "네임드 내 실시간 데이터 검색"},
         {"site": "라이브스코어", "url": f"https://www.google.com/search?q=site:livescore.co.kr+{encoded_team}", "note": "라이브스코어 내 커뮤니티 정보 검색"},
