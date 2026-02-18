@@ -1,56 +1,46 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os
-import urllib.parse
-import requests
-import re
-import time
-from bs4 import BeautifulSoup
+import urllib.parse, requests, re, time, os
 
 app = Flask(__name__)
 CORS(app)
 app.config['JSON_AS_ASCII'] = False
 
-# 검색 결과를 저장할 메모리 캐시
+# 검색 결과 캐시 (메모리 절약 및 속도 향상)
 cache = {}
 
-# [핵심] 차단 방지를 위한 '진짜 브라우저' 위장용 고성능 헤더
-def get_headers(site_type="common"):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,.*/*;q=0.8',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-    }
-    if site_type == "naver":
-        headers['Referer'] = 'https://search.naver.com/'
-    elif site_type == "lux":
-        headers['Referer'] = 'https://kr.top-esport.com/'
-    return headers
-
-def fetch_data(url, site_type="common"):
+def get_refined_data(team_name, site_domain):
     try:
-        # 서버 차단을 피하기 위해 접속 시마다 약간의 시차를 둠
-        time.sleep(0.5)
-        res = requests.get(url, headers=get_headers(site_type), timeout=8)
-        return res.text if res.status_code == 200 else None
-    except:
-        return None
-
-def extract_date_score(text):
-    # 날짜와 스코어를 한 번에 찾아내는 정규식
-    date = re.search(r'(\d{1,2}\.\d{1,2}\.|\d{2,4}-\d{1,2}-\d{1,2})', text)
-    score = re.search(r'(\d{1,2}\s?[:\-]\s?\d{1,2})', text)
-    
-    res_date = date.group(1).replace('-', '.') if date else ""
-    res_score = f" [{score.group(1).replace(' ', '')}]" if score else ""
-    
-    # 연도가 없는 경우 보정
-    if res_date and len(res_date) <= 6:
-        res_date = f"2026.{res_date}"
+        # 각 사이트별 구글 검색 쿼리 최적화
+        search_query = f"{team_name} 경기결과 site:{site_domain}"
+        url = f"https://www.google.com/search?q={urllib.parse.quote(search_query)}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept-Language': 'ko-KR,ko;q=0.9'
+        }
         
-    return f"{res_date}{res_score}".strip()
+        # 구글 서버에 요청 (차단 방지를 위해 약간의 지연시간 권장)
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            # 1. 날짜 추출 (02.14. 또는 2026-02-14 등)
+            date_match = re.search(r'(\d{1,2}\.\d{1,2}\.|\d{2,4}-\d{1,2}-\d{1,2})', res.text)
+            # 2. 점수 추출 (0:0 ~ 15:15 사이의 정상적인 스코어만 허용)
+            # [0:93] 같은 노이즈를 방지하기 위해 10의 자리 제한
+            score_match = re.search(r'\b([0-9]|1[0-5])\s?[:\-]\s?([0-9]|1[0-5])\b', res.text)
+            
+            date_str = date_match.group(1).replace('-', '.') if date_match else ""
+            # 연도가 짧을 경우 현재 연도(2026) 추가
+            if date_str and len(date_str) <= 6:
+                date_str = f"2026.{date_str}"
+                
+            score_str = f" [{score_match.group(0).replace(' ', '')}]" if score_match else ""
+            
+            if date_str or score_str:
+                return f"최근: {date_str}{score_str}"
+        
+        return "데이터 확인 중"
+    except:
+        return "일시적 지연"
 
 @app.route('/search', methods=['GET'])
 def search():
@@ -58,38 +48,26 @@ def search():
     if not team_name:
         return jsonify({"status": "error", "message": "팀명을 입력해주세요."})
 
-    # 1. 캐시 확인
+    # 캐시 확인 (30분 이내 검색 데이터 재사용)
     now = time.time()
     if team_name in cache:
         exp, data = cache[team_name]
         if now < exp:
-            return jsonify({"status": "success", "results": data, "cached": True})
+            return jsonify({"status": "success", "results": data, "from_cache": True})
 
-    # 2. 각 사이트별 정밀 타격
-    # 네이버
-    naver_html = fetch_data(f"https://search.naver.com/search.naver?query={urllib.parse.quote(team_name + ' 일정')}", "naver")
-    naver_res = extract_date_score(naver_html) if naver_html else "검색결과 없음"
-
-    # 럭스코어 (search.php 경로 보정)
-    lux_html = fetch_data(f"https://kr.top-esport.com/search.php?q={urllib.parse.quote(team_name)}", "lux")
-    lux_res = extract_date_score(lux_html) if lux_html else "연결 지연"
-
-    # 플래시스코어 & AI스코어 (구글 검색 스니펫 채굴 - 보안 우회)
-    # 이 사이트들은 직접 접속 시 차단되므로 구글이 긁어놓은 미리보기 텍스트를 이용합니다.
-    google_html = fetch_data(f"https://www.google.com/search?q={urllib.parse.quote(team_name + ' 경기결과 site:flashscore.co.kr OR site:aiscore.com')}")
-    extra_res = extract_date_score(google_html) if google_html else "상세 확인 필요"
-
+    # 5대 사이트 동시 채굴 (네임드 추가)
     results = [
-        {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={urllib.parse.quote(team_name)}+일정", "match_info": f"최근: {naver_res}"},
-        {"site": "럭스코어", "url": f"https://kr.top-esport.com/search.php?q={urllib.parse.quote(team_name)}", "match_info": f"최근: {lux_res}"},
-        {"site": "플래시스코어", "url": f"https://www.flashscore.co.kr/search/?q={urllib.parse.quote(team_name)}", "match_info": f"최근: {extra_res}"},
-        {"site": "AI스코어", "url": f"https://www.aiscore.com/ko/search/{urllib.parse.quote(team_name)}", "match_info": f"최근: {extra_res}"}
+        {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={urllib.parse.quote(team_name)}+일정", "match_info": get_refined_data(team_name, "sports.news.naver.com")},
+        {"site": "네임드(Named)", "url": f"https://www.google.com/search?q=site:named.net+{urllib.parse.quote(team_name)}", "match_info": get_refined_data(team_name, "named.net")},
+        {"site": "럭스코어", "url": f"https://kr.top-esport.com/search.php?q={urllib.parse.quote(team_name)}", "match_info": get_refined_data(team_name, "kr.top-esport.com")},
+        {"site": "플래시스코어", "url": f"https://www.flashscore.co.kr/search/?q={urllib.parse.quote(team_name)}", "match_info": get_refined_data(team_name, "flashscore.co.kr")},
+        {"site": "AI스코어", "url": f"https://www.aiscore.com/ko/search/{urllib.parse.quote(team_name)}", "match_info": get_refined_data(team_name, "aiscore.com")}
     ]
 
-    # 3. 캐시 저장
-    cache[team_name] = (now + 3600, results)
+    # 캐시 저장 (1800초 = 30분)
+    cache[team_name] = (now + 1800, results)
 
-    return jsonify({"status": "success", "results": results, "cached": False})
+    return jsonify({"status": "success", "results": results, "from_cache": False})
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
