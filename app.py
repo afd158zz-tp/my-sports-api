@@ -14,5 +14,9 @@ def search():
     }
     return jsonify(result)
 
+import os
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # Render에서 제공하는 포트 번호를 사용하거나, 없으면 5000번을 사용하라는 뜻입니다.
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
