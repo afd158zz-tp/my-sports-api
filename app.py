@@ -11,52 +11,46 @@ app = Flask(__name__)
 CORS(app)
 app.config['JSON_AS_ASCII'] = False
 
-# 결과를 저장할 메모리 금고 (팀명: [만료시간, 데이터])
+# 검색 결과를 저장할 메모리 캐시
 cache = {}
 
-# 보안 통과를 위한 정교한 헤더
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'ko-kr',
-    'Referer': 'https://m.naver.com/'
-}
+# [핵심] 차단 방지를 위한 '진짜 브라우저' 위장용 고성능 헤더
+def get_headers(site_type="common"):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,.*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+    }
+    if site_type == "naver":
+        headers['Referer'] = 'https://search.naver.com/'
+    elif site_type == "lux":
+        headers['Referer'] = 'https://kr.top-esport.com/'
+    return headers
 
-def get_naver_data(team):
+def fetch_data(url, site_type="common"):
     try:
-        # 모바일 네이버는 데이터가 더 가볍고 구조가 단순합니다.
-        url = f"https://m.search.naver.com/search.naver?query={urllib.parse.quote(team + ' 경기일정')}"
-        res = requests.get(url, headers=HEADERS, timeout=5)
-        if res.status_code == 200:
-            text = res.text
-            # 날짜와 점수 패턴 매칭
-            date = re.search(r'(\d{1,2}\.\d{1,2}\.\([월화수목금토일]\))', text)
-            score = re.search(r'(\d{1,2}\s?:\s?\d{1,2})', text)
-            
-            res_date = f"2026.{date.group(1)}" if date else "일정 확인"
-            res_score = f" [{score.group(1).strip()}]" if score else ""
-            return f"{res_date}{res_score}"
-        return "데이터 없음"
+        # 서버 차단을 피하기 위해 접속 시마다 약간의 시차를 둠
+        time.sleep(0.5)
+        res = requests.get(url, headers=get_headers(site_type), timeout=8)
+        return res.text if res.status_code == 200 else None
     except:
-        return "확인 불가"
+        return None
 
-def get_luxscore_data(team):
-    try:
-        # 404 에러를 피하기 위한 수정된 검색 경로
-        url = f"https://kr.top-esport.com/search.php?q={urllib.parse.quote(team)}"
-        res = requests.get(url, headers=HEADERS, timeout=5)
-        if res.status_code == 200:
-            content = res.text
-            # 텍스트 데이터에서 날짜(00-00-00)와 점수(0-0) 추출
-            date = re.search(r'(\d{2,4}[-./]\d{1,2}[-./]\d{1,2})', content)
-            score = re.search(r'(\d{1,2}\s?-\s?\d{1,2})', content)
-            
-            res_date = date.group(1).replace('-', '.') if date else "결과 없음"
-            res_score = f" [{score.group(1).replace(' ', '')}]" if score else ""
-            return f"{res_date}{res_score}"
-        return "연결 실패"
-    except:
-        return "확인 불가"
+def extract_date_score(text):
+    # 날짜와 스코어를 한 번에 찾아내는 정규식
+    date = re.search(r'(\d{1,2}\.\d{1,2}\.|\d{2,4}-\d{1,2}-\d{1,2})', text)
+    score = re.search(r'(\d{1,2}\s?[:\-]\s?\d{1,2})', text)
+    
+    res_date = date.group(1).replace('-', '.') if date else ""
+    res_score = f" [{score.group(1).replace(' ', '')}]" if score else ""
+    
+    # 연도가 없는 경우 보정
+    if res_date and len(res_date) <= 6:
+        res_date = f"2026.{res_date}"
+        
+    return f"{res_date}{res_score}".strip()
 
 @app.route('/search', methods=['GET'])
 def search():
@@ -64,38 +58,35 @@ def search():
     if not team_name:
         return jsonify({"status": "error", "message": "팀명을 입력해주세요."})
 
-    # 1. 캐시 확인 (있으면 즉시 반환)
+    # 1. 캐시 확인
     now = time.time()
     if team_name in cache:
         exp, data = cache[team_name]
         if now < exp:
             return jsonify({"status": "success", "results": data, "cached": True})
 
-    # 2. 우회 크롤링 실행
+    # 2. 각 사이트별 정밀 타격
+    # 네이버
+    naver_html = fetch_data(f"https://search.naver.com/search.naver?query={urllib.parse.quote(team_name + ' 일정')}", "naver")
+    naver_res = extract_date_score(naver_html) if naver_html else "검색결과 없음"
+
+    # 럭스코어 (search.php 경로 보정)
+    lux_html = fetch_data(f"https://kr.top-esport.com/search.php?q={urllib.parse.quote(team_name)}", "lux")
+    lux_res = extract_date_score(lux_html) if lux_html else "연결 지연"
+
+    # 플래시스코어 & AI스코어 (구글 검색 스니펫 채굴 - 보안 우회)
+    # 이 사이트들은 직접 접속 시 차단되므로 구글이 긁어놓은 미리보기 텍스트를 이용합니다.
+    google_html = fetch_data(f"https://www.google.com/search?q={urllib.parse.quote(team_name + ' 경기결과 site:flashscore.co.kr OR site:aiscore.com')}")
+    extra_res = extract_date_score(google_html) if google_html else "상세 확인 필요"
+
     results = [
-        {
-            "site": "네이버 스포츠", 
-            "url": f"https://search.naver.com/search.naver?query={urllib.parse.quote(team_name)}+경기일정", 
-            "match_info": get_naver_data(team_name)
-        },
-        {
-            "site": "럭스코어", 
-            "url": f"https://kr.top-esport.com/search.php?q={urllib.parse.quote(team_name)}", 
-            "match_info": get_luxscore_data(team_name)
-        },
-        {
-            "site": "플래시스코어", 
-            "url": f"https://www.flashscore.co.kr/search/?q={urllib.parse.quote(team_name)}", 
-            "match_info": "상세 페이지 이동" 
-        },
-        {
-            "site": "AI스코어", 
-            "url": f"https://www.aiscore.com/ko/search/{urllib.parse.quote(team_name)}", 
-            "match_info": "데이터 분석 확인"
-        }
+        {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={urllib.parse.quote(team_name)}+일정", "match_info": f"최근: {naver_res}"},
+        {"site": "럭스코어", "url": f"https://kr.top-esport.com/search.php?q={urllib.parse.quote(team_name)}", "match_info": f"최근: {lux_res}"},
+        {"site": "플래시스코어", "url": f"https://www.flashscore.co.kr/search/?q={urllib.parse.quote(team_name)}", "match_info": f"최근: {extra_res}"},
+        {"site": "AI스코어", "url": f"https://www.aiscore.com/ko/search/{urllib.parse.quote(team_name)}", "match_info": f"최근: {extra_res}"}
     ]
 
-    # 3. 캐시에 저장 (3600초 = 1시간)
+    # 3. 캐시 저장
     cache[team_name] = (now + 3600, results)
 
     return jsonify({"status": "success", "results": results, "cached": False})
