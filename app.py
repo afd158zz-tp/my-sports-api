@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 import urllib.parse
 import requests
+import re
 from bs4 import BeautifulSoup
 from datetime import datetime
 
@@ -10,25 +11,26 @@ app = Flask(__name__)
 CORS(app)
 app.config['JSON_AS_ASCII'] = False
 
-def get_real_score(team_name):
+def get_real_date(team_name):
     try:
-        query = urllib.parse.quote(f"{team_name} 경기결과")
+        query = urllib.parse.quote(f"{team_name} 경기일정")
         url = f"https://search.naver.com/search.naver?query={query}"
-        # 브라우저인 척 속이는 마법의 문장 (User-Agent)
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        
-        # ★ timeout=5 를 넣어서 5초 넘게 걸리면 그냥 무시하게 만들었어요!
         res = requests.get(url, headers=headers, timeout=5)
         
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            # 네이버 점수판 근처 글자 긁어오기
-            score_area = soup.select_one('.score_wrap, .cs_common_module')
-            if score_area:
-                return score_area.get_text(separator=' ').strip()[:30]
+            # 1. 네이버 스포츠 박스에서 날짜 패턴(00.00) 찾기
+            text = soup.get_text()
+            date_pattern = re.compile(r'\d{1,2}\.\d{1,2}\.') # "02.18." 형태 찾기
+            found_dates = date_pattern.findall(text)
+            
+            if found_dates:
+                # 가장 마지막에 언급된 날짜가 보통 최근 경기일 확률이 높음
+                return f"최근 경기: {found_dates[-1]}"
         return None
     except:
-        return None # 에러 나도 서버는 멈추지 말고 무조건 넘어가라!
+        return None
 
 @app.route('/search', methods=['GET'])
 def search():
@@ -36,19 +38,18 @@ def search():
     if not team_name:
         return jsonify({"status": "error", "message": "팀명을 입력해주세요."})
 
-    # 점수 가져오기 시도
-    real_score = get_real_score(team_name)
+    # 네이버에서 날짜 정보 획득 시도
+    scraped_date = get_real_date(team_name)
     today = datetime.now().strftime('%m/%d')
     
-    # 점수가 있으면 점수, 없으면 기본 문구!
-    match_display = real_score if real_score else f"{today} 경기 정보 확인"
+    # 날짜를 못 가져오면 '날짜 확인 필요'라고 명시해서 다른 사이트 클릭을 유도함
+    match_display = scraped_date if scraped_date else "경기 일자 확인 필요"
 
     search_targets = [
         {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={urllib.parse.quote(team_name)}+경기결과", "match_info": match_display},
-        {"site": "구글 스포츠", "url": f"https://www.google.com/search?q={urllib.parse.quote(team_name)}+경기결과", "match_info": "실시간 리그 스코어"},
-        {"site": "플래시스코어", "url": f"https://www.google.com/search?q=site:flashscore.co.kr+{urllib.parse.quote(team_name)}", "match_info": "종료 경기 상세 정보"},
-        {"site": "라이브스코어", "url": f"https://www.google.com/search?q=site:livescore.co.kr+{urllib.parse.quote(team_name)}", "match_info": "전종목 실시간 스코어"},
-        {"site": "AI스코어", "url": f"https://www.google.com/search?q=site:aiscore.com+{urllib.parse.quote(team_name)}", "match_info": "AI 승률 예측 통계"}
+        {"site": "구글 스포츠", "url": f"https://www.google.com/search?q={urllib.parse.quote(team_name)}+경기결과", "match_info": "실시간 데이터 확인"},
+        {"site": "플래시스코어", "url": f"https://www.google.com/search?q=site:flashscore.co.kr+{urllib.parse.quote(team_name)}", "match_info": "종료/예정 상세일정"},
+        {"site": "라이브스코어", "url": f"https://www.google.com/search?q=site:livescore.co.kr+{urllib.parse.quote(team_name)}", "match_info": "전종목 통합 일정"}
     ]
 
     return jsonify({"status": "success", "results": search_targets})
