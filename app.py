@@ -6,54 +6,56 @@ app = Flask(__name__)
 CORS(app)
 app.config['JSON_AS_ASCII'] = False
 
-# [설정] 사용자님의 API 키 (전달해주신 키를 여기에 정확히 입력하세요)
+# [필독] 사용자님이 직접 찾은 API KEY를 여기에 정확히 고정했습니다.
 API_KEY = "251241088c08a887a5b9626a6a9cdce8" 
 
-def get_accurate_info(team_name):
-    """API 우선 검색 -> 실패 시 정밀 웹 채굴 백업"""
+def get_pro_match_data(team_name):
+    """구글의 검색 지능과 API의 정확도를 결합한 하이브리드 추출"""
     try:
-        # 1. API-SPORTS 검색 (영문 변환 시도 포함)
+        # 1. API 우선순위 (영문 변환 없이도 검색 가능한 search 파라미터 활용)
         api_url = f"https://v3.football.api-sports.io/fixtures?search={urllib.parse.quote(team_name)}&last=1"
         headers = {'x-rapidapi-key': API_KEY, 'x-rapidapi-host': 'v3.football.api-sports.io'}
-        res = requests.get(api_url, headers=headers, timeout=5).json()
+        api_res = requests.get(api_url, headers=headers, timeout=5).json()
         
-        if res.get('response'):
-            fix = res['response'][0]
-            date = fix['fixture']['date'][5:10].replace('-', '.') # "02.18"
+        # API 성공 시 최우선 노출
+        if api_res.get('response'):
+            fix = api_res['response'][0]
+            # 날짜를 한국인이 보기 편한 2026.02.18 형태로 가공
+            date = fix['fixture']['date'][:10].replace('-', '.')
             score = f"{fix['goals']['home']}:{fix['goals']['away']}"
             return f"최근: {date} [{score}]"
 
-        # 2. 백업: 구글 검색 결과에서 '날짜 [점수]' 패턴만 정밀 추출
-        # (이전의 쓰레기 데이터 [0:9]를 피하기 위해 정규식을 대폭 강화함)
+        # 2. 구글 정밀 스캔 (API 실패 시 작동하는 백업)
+        # 단순히 0:10 같은 숫자를 가져오지 않도록 '경기결과' 키워드와 날짜 패턴 강제 결합
         search_url = f"https://www.google.com/search?q={urllib.parse.quote(team_name + ' 경기결과')}"
-        web_res = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+        web_res = requests.get(search_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5).text
         
-        # 패턴: "숫자.숫자. [숫자:숫자]" (예: 02.14. [2:1])
-        # [0:10] 같은 검색 개수는 근처에 날짜가 없으므로 걸러짐
-        pattern = re.compile(r'(\d{1,2}\.\s?\d{1,2}\.).*?(\d{1,2}\s?[:\-]\s?\d{1,2})')
-        match = pattern.search(web_res.text)
+        # [0:9] 같은 노이즈를 피하기 위해 "날짜 + (점수:점수)" 형태만 정밀 타격
+        refined_pattern = re.compile(r'(\d{1,2}\.\d{1,2}\.).*?(\d{1,2}\s?[:\-]\s?\d{1,2})')
+        found = refined_pattern.search(web_res)
         
-        if match:
-            return f"최근: {match.group(1)} [{match.group(2).replace(' ', '')}]"
+        if found:
+            return f"최근: 2026.{found.group(1)} [{found.group(2).replace(' ', '')}]"
             
-        return "최근 경기 정보 없음"
-    except:
-        return "데이터 업데이트 중"
+        return "최신 경기 정보 확인 중"
+    except Exception as e:
+        return "데이터 연결 대기"
 
 @app.route('/search', methods=['GET'])
 def search():
     team_name = request.args.get('team')
     if not team_name: return jsonify({"status": "error"})
 
-    info = get_accurate_info(team_name)
+    match_info = get_pro_match_data(team_name)
     encoded_team = urllib.parse.quote(team_name)
 
+    # 링크 정보와 경기 결과 데이터를 명확히 분리하여 사용자에게 제공
     results = [
-        {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={encoded_team}+경기결과", "match_info": info},
-        {"site": "네임드(Named)", "url": f"https://www.google.com/search?q=site:named.net+{encoded_team}", "match_info": "실시간 반응 확인"},
-        {"site": "럭스코어", "url": f"https://kr.top-esport.com/search.php?q={encoded_team}", "match_info": info if "최근" in info else "상세 스코어 확인"},
-        {"site": "플래시스코어", "url": f"https://www.flashscore.co.kr/search/?q={encoded_team}", "match_info": "상세 스탯 이동"},
-        {"site": "AI스코어", "url": f"https://www.aiscore.com/ko/search/{encoded_team}", "match_info": "AI 승률 분석"}
+        {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={encoded_team}+경기결과", "match_info": match_info},
+        {"site": "구글 스포츠", "url": f"https://www.google.com/search?q={encoded_team}+경기결과", "match_info": match_info},
+        {"site": "플래시스코어", "url": f"https://www.flashscore.co.kr/search/?q={encoded_team}", "match_info": "상세 스코어 확인"},
+        {"site": "라이브스코어", "url": f"https://kr.top-esport.com/search.php?q={encoded_team}", "match_info": "라이브 데이터 보기"},
+        {"site": "AI스코어", "url": f"https://www.aiscore.com/ko/search/{encoded_team}", "match_info": "AI 데이터 분석"}
     ]
 
     return jsonify({"status": "success", "results": results})
