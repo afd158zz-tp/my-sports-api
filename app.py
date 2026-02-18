@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
-from bs4 import BeautifulSoup
 import os
+import urllib.parse
 
 app = Flask(__name__)
 CORS(app)
@@ -14,45 +13,26 @@ def search():
     if not team_name:
         return jsonify({"status": "error", "message": "팀명을 입력해주세요."})
 
-    results_list = []
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-
-    # 1. 네이버 스포츠 검색 (예시)
-    try:
-        naver_url = f"https://search.naver.com/search.naver?query={team_name}+경기결과"
-        res = requests.get(naver_url, headers=headers)
-        # 실제로는 여기서 특정 태그를 파싱해야 하지만, 
-        # 우선 연결 확인을 위해 검색 링크와 요약을 제공합니다.
-        results_list.append({
-            "site": "네이버 스포츠",
-            "result": f"[{team_name}] 최신 일정 및 결과 요약을 확인하세요.",
-            "url": naver_url
-        })
-    except:
-        pass
-
-    # 2. 다음 스포츠 검색
-    try:
-        daum_url = f"https://search.daum.net/search?w=tot&q={team_name}+경기결과"
-        results_list.append({
-            "site": "다음 스포츠",
-            "result": f"[{team_name}] 실시간 스코어 및 중계 정보를 제공합니다.",
-            "url": daum_url
-        })
-    except:
-        pass
-
-    # 3. 플래시스코어 (바로가기)
-    results_list.append({
-        "site": "플래시스코어",
-        "result": "전세계 실시간 스코어 보드 바로가기",
-        "url": f"https://www.flashscore.co.kr/search/?q={team_name}"
-    })
+    # 검색어 인코딩 (URL에 한글이 들어갈 수 있게 변환)
+    encoded_team = urllib.parse.quote(team_name)
+    
+    # 우리가 공략할 사이트 리스트 정의
+    search_targets = [
+        {"site": "네이버 스포츠", "url": f"https://search.naver.com/search.naver?query={encoded_team}+경기결과", "note": "최신 뉴스 및 국내외 공식 기록"},
+        {"site": "구글 스포츠", "url": f"https://www.google.com/search?q={encoded_team}+경기결과", "note": "구글 자체 스코어 보드 및 통계"},
+        {"site": "다음 스포츠", "url": f"https://search.daum.net/search?w=tot&q={encoded_team}+경기결과", "note": "영상 하이라이트 및 실시간 중계"},
+        {"site": "플래시스코어", "url": f"https://www.flashscore.co.kr/search/?q={encoded_team}", "note": "전세계 모든 종목 실시간 스코어"},
+        {"site": "네임드(Named)", "url": f"https://www.named.com/game/search/{encoded_team}", "note": "실시간 데이터 및 커뮤니티 분석"},
+        {"site": "라이브스코어", "url": f"https://www.livescore.co.kr/bbs/board.php?bo_table=game&sca=&sop=and&sfl=wr_subject&stx={encoded_team}", "note": "국내 최대 실시간 스코어 커뮤니티"},
+        {"site": "스포조이", "url": f"http://www.spojoy.com/search/?q={encoded_team}", "note": "경기 분석 및 배당 정보 정보"},
+        {"site": "AI스코어", "url": f"https://www.aiscore.com/ko/search/{encoded_team}", "note": "AI 기반 경기 예측 및 통계"},
+        {"site": "스코어맨", "url": f"https://scoreman123.com/bbs/board.php?bo_table=free&sfl=wr_subject&stx={encoded_team}", "note": "경기 결과 및 자유 분석 게시판"}
+    ]
 
     return jsonify({
         "status": "success",
         "team": team_name,
-        "results": results_list
+        "results": search_targets
     })
 
 if __name__ == '__main__':
