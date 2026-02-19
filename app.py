@@ -9,28 +9,28 @@ CORS(app)
 def sports_search():
     team = request.args.get('team')
     if not team:
-        return jsonify({"status": "error", "message": "No team name"}), 400
+        return jsonify({"status": "error", "message": "팀명을 입력하세요"}), 400
 
     try:
-        # 가입 필요 없는 DuckDuckGo 검색 엔진 활용
         with DDGS() as ddgs:
-            query = f"{team} 경기 결과 스코어"
-            # 텍스트 검색 결과 중 가장 관련성 높은 3개를 긁어옵니다.
-            results = list(ddgs.text(query, max_results=3))
+            # 실시간 경기 결과 텍스트를 우선적으로 긁어옵니다.
+            query = f"{team} 최근 경기 결과 스코어"
+            results = list(ddgs.text(query, max_results=1))
 
             if results:
+                # 검색된 텍스트 전체를 'score' 자리에 넣어버립니다. (가장 확실한 노출 방법)
                 return jsonify({
                     "status": "success",
                     "match_data": {
-                        "league": "실시간 통합 검색",
+                        "league": "실시간 스포츠 검색",
                         "home_name": team,
-                        "away_name": "최근 경기",
-                        "score": "결과 확인됨",
-                        "status": "라이브/종료",
-                        "summary": results[0]['body'] # Wix UI의 txtScore에 표시될 핵심 내용
+                        "away_name": "최근 전적",
+                        "score": results[0]['body'][:100] + "...", # 검색 요약 앞부분
+                        "status": "검색 완료",
+                        "summary": results[0]['body']
                     }
                 })
-        return jsonify({"status": "fail", "message": "No data found"})
+        return jsonify({"status": "fail", "message": "데이터를 찾지 못했습니다."})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
