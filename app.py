@@ -1,50 +1,63 @@
-import { fetch } from 'wix-fetch';
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import requests
 
-$w.onReady(function () {
-    $w("#btnSearch").onClick(() => searchGame());
-    $w("#teamInput").onKeyPress((event) => {
-        if (event.key === "Enter") searchGame();
-    });
-});
+app = Flask(__name__)
+CORS(app)
 
-async function searchGame() {
-    const team = $w("#teamInput").value.trim();
-    // 사용자님의 기존 Render 서버 주소를 그대로 사용합니다.
-    const url = `https://my-sports-api.onrender.com/search?team=${encodeURIComponent(team)}`;
+API_KEY = "cfba195cc6msh2007a2f5bf9f961p15da80jsn1fa91019b100"
+BASE_URL = "https://allsportsapi2.p.rapidapi.com/api"
 
-    if (!team) return;
+# 지원하는 모든 종목 리스트
+SPORTS = ['football', 'basketball', 'baseball', 'volleyball', 'hockey', 'esports']
 
-    $w("#btnSearch").label = "조회 중...";
+@app.route('/search', methods=['GET'])
+def search_sports():
+    team_name = request.args.get('team')
+    if not team_name:
+        return jsonify({"status": "error", "message": "No team name provided"}), 400
 
-    try {
-        const res = await fetch(url, { method: 'get' });
-        const json = await res.json();
-        
-        $w("#btnSearch").label = "GO";
-
-        if (json.status === "success") {
-            const data = json.match_data;
-
-            // 데이터 주입 (기존 ID 유지)
-            $w("#txtLeague").text = data.league;
-            $w("#txtDate").text = `${data.date} | ${data.time}`;
-            $w("#txtHomeTeam").text = data.home_name;
-            $w("#txtAwayTeam").text = data.away_name;
-            $w("#txtScore").text = data.score;
-            $w("#txtStatus").text = data.status;
-
-            if (data.home_logo) $w("#imgHomeLogo").src = data.home_logo;
-            if (data.away_logo) $w("#imgAwayLogo").src = data.away_logo;
-
-            // 비공개 해제 (사용자님이 찾으신 해결책)
-            const ids = ["#txtLeague", "#txtDate", "#txtHomeTeam", "#txtAwayTeam", "#txtScore", "#txtStatus", "#imgHomeLogo", "#imgAwayLogo"];
-            ids.forEach(id => $w(id).show());
-
-        } else {
-            alert("검색 결과가 없습니다. (서버 응답 실패)");
-        }
-    } catch (err) {
-        $w("#btnSearch").label = "GO";
-        console.error("통신 에러:", err);
+    headers = {
+        "x-rapidapi-key": API_KEY,
+        "x-rapidapi-host": "allsportsapi2.p.rapidapi.com"
     }
-}
+
+    try:
+        # 모든 종목을 순차적으로 검색
+        for sport in SPORTS:
+            search_url = f"{BASE_URL}/{sport}/search/{team_name}"
+            response = requests.get(search_url, headers=headers)
+            search_data = response.json()
+
+            if search_data.get('results'):
+                # 팀 발견 시 해당 팀의 최근 경기 정보 가져오기
+                team_id = search_data['results'][0]['entity']['id']
+                match_url = f"{BASE_URL}/{sport}/team/{team_id}/matches/last/1"
+                match_res = requests.get(match_url, headers=headers).json()
+
+                if match_res.get('events'):
+                    event = match_res['events'][0]
+                    
+                    # Wix 디자인에 맞춘 통합 데이터 구조 생성
+                    return jsonify({
+                        "status": "success",
+                        "match_data": {
+                            "league": event['tournament']['name'],
+                            "date": event['status']['description'], # 경기 상태(종료 등)
+                            "time": "", # 필요 시 시간 변환 로직 추가 가능
+                            "home_name": event['homeTeam']['name'],
+                            "away_name": event['awayTeam']['name'],
+                            "score": f"{event['homeScore'].get('current', 0)} : {event['awayScore'].get('current', 0)}",
+                            "status": "LIVE" if event['status']['type'] == "inprogress" else "FINISHED",
+                            "home_logo": f"{BASE_URL}/{sport}/team/{event['homeTeam']['id']}/image",
+                            "away_logo": f"{BASE_URL}/{sport}/team/{event['awayTeam']['id']}/image"
+                        }
+                    })
+
+        return jsonify({"status": "fail", "message": "No data found in any sport"})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
