@@ -7,40 +7,32 @@ import urllib.parse
 app = Flask(__name__)
 CORS(app)
 
-def google_sports_scanner(team_name):
-    """구글 검색 결과에서 날짜와 점수만 정밀하게 골라내는 로직"""
+API_KEY = "251241088c08a887a5b9626a6a9cdce8"
+
+def fetch_from_google_backup(team_name):
+    """API에 데이터가 없을 때 구글 검색 결과를 지능적으로 분석"""
     try:
-        # 구글에서 '팀명 경기결과'로 검색
         search_query = f"{team_name} 경기결과"
         url = f"https://www.google.com/search?q={urllib.parse.quote(search_query)}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        res = requests.get(url, headers=headers, timeout=5).text
         
-        response = requests.get(url, headers=headers, timeout=5)
-        html_content = response.text
-
-        # 정규식: 날짜(MM.DD.)와 점수(0:0)가 근처에 있는 패턴만 추출
-        # 제가 정보를 찾을 때 썼던 '필터링' 방식입니다.
+        # 날짜와 점수가 붙어있는 패턴 정밀 타격 (제가 어제 팩트체크한 로직)
         pattern = re.compile(r'(\d{1,2}\.\d{1,2}\.).*?(\d{1,2}\s?[:\-]\s?\d{1,2})')
-        matches = pattern.findall(html_content)
-
-        if matches:
-            # 가장 최근 데이터 하나만 선택
-            last_match = matches[0]
-            date = f"2026.{last_match[0]}"
-            score = last_match[1].replace(' ', '').replace('-', ':')
-            
-            # [0:9] 같은 노이즈 차단 (점수 합계가 너무 크면 무시)
-            s1, s2 = map(int, score.split(':'))
-            if s1 + s2 < 15:
-                return {
-                    "date": date,
-                    "score": score,
-                    "home": team_name,
-                    "away": "상대팀",
-                    "league": "스포츠 리그",
-                    "status": "경기 종료"
-                }
+        found = pattern.search(res)
         
+        if found:
+            return {
+                "date": f"2026년 {found.group(1).replace('.', '월 ')}일",
+                "time": "시간 정보 확인 중",
+                "home_name": team_name,
+                "away_name": "상대팀",
+                "score": found.group(2).replace(' ', '').replace('-', ':'),
+                "league": "스포츠 리그",
+                "status": "경기 종료",
+                "home_logo": "", # 구글 크롤링은 로고 추출이 불안정함
+                "away_logo": ""
+            }
         return None
     except:
         return None
@@ -48,30 +40,39 @@ def google_sports_scanner(team_name):
 @app.route('/search', methods=['GET'])
 def search():
     team_name = request.args.get('team')
-    if not team_name:
-        return jsonify({"status": "error"})
+    if not team_name: return jsonify({"status": "error"})
 
-    # 제가 찾은 방식(구글 스캔)으로 정보 획득
-    result = google_sports_scanner(team_name)
+    # 1단계: API-SPORTS (가장 정확한 팩트 + 로고)
+    try:
+        api_url = f"https://v3.football.api-sports.io/fixtures?search={team_name}&last=1"
+        headers = {'x-rapidapi-key': API_KEY, 'x-rapidapi-host': 'v3.football.api-sports.io'}
+        api_res = requests.get(api_url, headers=headers, timeout=5).json()
 
-    if result:
-        return jsonify({
-            "status": "success",
-            "match_data": result
-        })
-    else:
-        # 정보가 없을 경우 사용자에게 보여줄 기본값
-        return jsonify({
-            "status": "success",
-            "match_data": {
-                "date": "2026.02.14",
-                "score": "2:0",
-                "home": team_name,
-                "away": "최근 경기",
-                "league": "기록 확인됨",
-                "status": "확인 완료"
-            }
-        })
+        if api_res.get('response'):
+            m = api_res['response'][0]
+            return jsonify({
+                "status": "success",
+                "match_data": {
+                    "date": m['fixture']['date'][:10].replace('-', '년 ') + '일',
+                    "time": m['fixture']['date'][11:16],
+                    "home_name": m['teams']['home']['name'],
+                    "away_name": m['teams']['away']['name'],
+                    "home_logo": m['teams']['home']['logo'],
+                    "away_logo": m['teams']['away']['logo'],
+                    "score": f"{m['goals']['home']} : {m['goals']['away']}",
+                    "league": m['league']['name'],
+                    "status": "경기 종료" if m['fixture']['status']['short'] == "FT" else "예정"
+                }
+            })
+    except:
+        pass
+
+    # 2단계: 구글 검색 백업 (API에 없을 경우 실행)
+    backup_data = fetch_from_google_backup(team_name)
+    if backup_data:
+        return jsonify({"status": "success", "match_data": backup_data})
+
+    return jsonify({"status": "fail", "message": "모든 경로에서 데이터를 찾을 수 없습니다."})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
